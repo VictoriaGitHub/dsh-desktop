@@ -45,6 +45,12 @@ const DEFAULT_PORT: u16 = 3080;
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 
+// ---------- 运行时独立更新（dsh 依赖树） ----------
+const RUNTIME_MANIFEST_URL: &str =
+    "https://github.com/VictoriaGitHub/dsh-desktop/releases/latest/download/runtime-manifest.json";
+// 更新签名公钥（与整包更新同一密钥对；from_base64 需要纯公钥行，见 ~/.tauri/dsh-desktop.key.pub 解码后的第二行）
+const RUNTIME_PUBKEY: &str = "RWSIKV/4tPuEJYz+CGeqIQR05xkJU1PhTWy49nxtxHk35kdQjyYzFscf";
+
 /// 后端端口：优先读 DSH_PORT 环境变量（可配置），默认 3080
 fn backend_port() -> u16 {
     std::env::var("DSH_PORT")
@@ -134,7 +140,45 @@ fn log_path() -> PathBuf {
     base.join(".dsh-desktop").join("backend.log")
 }
 
-/// 启动 `dsh web`（优先内置自包含运行时，回退外部 dsh），日志写入 ~/.dsh-desktop/backend.log
+/// 解析 (node, dsh 入口)：
+/// - node：始终用 App 内置（稳定，不更新）
+/// - dsh：优先用户数据目录的 current 版本（可独立更新），内置兜底
+fn resolve_dsh_entry(app: &AppHandle) -> Option<(PathBuf, PathBuf)> {
+    let res = app.path().resource_dir().ok()?;
+    let node = res.join("runtime").join("bin").join("node");
+    if !node.is_file() {
+        return None;
+    }
+    // 数据目录优先：<app_data>/runtime/<current>/dsh
+    let mut dsh: Option<PathBuf> = None;
+    if let Ok(data) = app.path().app_data_dir() {
+        let manifest_path = data.join("runtime").join("manifest.json");
+        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(m) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(ver) = m.get("current").and_then(|v| v.as_str()) {
+                    let cand = data.join("runtime").join(ver).join("dsh");
+                    if cand.is_dir() {
+                        dsh = Some(cand);
+                    }
+                }
+            }
+        }
+    }
+    let dsh = dsh.unwrap_or_else(|| res.join("runtime").join("dsh"));
+    let entry = dsh
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("lib")
+        .join("bin.js");
+    if entry.is_file() {
+        Some((node, entry))
+    } else {
+        None
+    }
+}
+
+/// 启动 `dsh web`（优先自包含运行时，回退外部 dsh），日志写入 ~/.dsh-desktop/backend.log
 fn spawn_backend(port: u16, app: &AppHandle) -> Result<Child, String> {
     let log = log_path();
     if let Some(parent) = log.parent() {
@@ -149,27 +193,13 @@ fn spawn_backend(port: u16, app: &AppHandle) -> Result<Child, String> {
         .try_clone()
         .map_err(|e| format!("日志文件克隆失败: {}", e))?;
 
-    // 1) 内置自包含运行时（App 资源目录中的 Node + dsh）—— 用户无需预装任何东西
+    // 1) 内置/数据目录自包含运行时（用户无需预装任何东西）
     let mut cmd: Option<Command> = None;
-    if let Ok(res) = app.path().resource_dir() {
-        let node = res
-            .join("runtime")
-            .join("bin")
-            .join("node");
-        let dsh_js = res
-            .join("runtime")
-            .join("dsh")
-            .join("node_modules")
-            .join("@deepseek-ai")
-            .join("dsh")
-            .join("lib")
-            .join("bin.js");
-        if node.is_file() && dsh_js.is_file() {
-            let mut c = Command::new(&node);
-            c.arg(&dsh_js);
-            c.args(["web", "--host", "127.0.0.1", "--port", &port.to_string()]);
-            cmd = Some(c);
-        }
+    if let Some((node, entry)) = resolve_dsh_entry(app) {
+        let mut c = Command::new(&node);
+        c.arg(&entry);
+        c.args(["web", "--host", "127.0.0.1", "--port", &port.to_string()]);
+        cmd = Some(c);
     }
     // 2) 回退：外部 dsh 可执行文件（DSH_BIN / npx 缓存 / PATH）
     if cmd.is_none() {
@@ -303,9 +333,10 @@ fn toggle_main_window(app: &AppHandle) {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItemBuilder::with_id("show", "显示 / 隐藏窗口").build(app)?;
     let update = MenuItemBuilder::with_id("update", "检查更新…").build(app)?;
+    let update_runtime = MenuItemBuilder::with_id("update-runtime", "检查 dsh 运行时更新…").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "退出 DSH Desktop").build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&show, &update, &quit])
+        .items(&[&show, &update, &update_runtime, &quit])
         .build()?;
 
     let icon = tauri::image::Image::new_owned(
@@ -322,6 +353,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => toggle_main_window(app),
             "update" => check_for_updates(app),
+            "update-runtime" => check_runtime_update(app, true),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -415,6 +447,196 @@ fn check_for_updates(app: &AppHandle) {
 }
 
 // ---------------------------------------------------------------------------
+// 运行时独立更新（dsh 依赖树，不更新客户端壳）
+// ---------------------------------------------------------------------------
+
+fn runtime_root(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("runtime"))
+}
+
+fn local_runtime_manifest(app: &AppHandle) -> Option<serde_json::Value> {
+    let root = runtime_root(app)?;
+    let content = std::fs::read_to_string(root.join("manifest.json")).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn current_runtime_version(app: &AppHandle) -> Option<String> {
+    local_runtime_manifest(app)?
+        .get("current")?
+        .as_str()
+        .map(String::from)
+}
+
+fn set_runtime_version(app: &AppHandle, current: &str, previous: Option<&str>) {
+    if let Some(root) = runtime_root(app) {
+        let _ = std::fs::create_dir_all(&root);
+        let manifest = serde_json::json!({
+            "current": current,
+            "previous": previous,
+            "updatedAt": chrono_like_now(),
+        });
+        let _ = std::fs::write(root.join("manifest.json"), serde_json::to_string_pretty(&manifest).unwrap_or_default());
+    }
+}
+
+/// 简易 UTC 时间戳（避免引入 chrono）
+fn chrono_like_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_default()
+}
+
+/// 清理：保留 current 与 previous，删除其余版本目录与 .tmp-* 残留
+fn cleanup_runtime_dirs(app: &AppHandle, keep: &[String]) {
+    let Some(root) = runtime_root(app) else { return };
+    let Ok(entries) = std::fs::read_dir(&root) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "manifest.json" || keep.iter().any(|k| *k == name) {
+            continue;
+        }
+        if entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
+            println!("[dsh-desktop] 清理旧运行时: {}", name);
+        }
+    }
+}
+
+/// 运行时更新流程（后台线程执行；manual=true 时无更新也提示）
+fn check_runtime_update(app: &AppHandle, manual: bool) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let notify = |msg: String| {
+            if let Some(window) = handle.get_webview_window("main") {
+                let js = format!("alert({});", serde_json::to_string(&msg).unwrap_or_default());
+                let _ = window.eval(&js);
+            }
+        };
+        // 1) 拉取远程清单
+        let body = match ureq::get(RUNTIME_MANIFEST_URL).timeout(Duration::from_secs(30)).call() {
+            Ok(resp) => match resp.into_string() {
+                Ok(s) => s,
+                Err(_) => {
+                    if manual { notify("检查运行时更新失败：读取响应失败".into()); }
+                    return;
+                }
+            },
+            Err(_) => {
+                if manual { notify("检查运行时更新失败：无法连接更新源".into()); }
+                return;
+            }
+        };
+        let remote: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(_) => {
+                if manual { notify("检查运行时更新失败：清单格式错误".into()); }
+                return;
+            }
+        };
+        let Some(remote_ver) = remote.get("version").and_then(|v| v.as_str()).map(String::from) else {
+            if manual { notify("检查运行时更新失败：清单缺少版本".into()); }
+            return;
+        };
+        let local = current_runtime_version(&handle);
+        if local.as_deref() == Some(remote_ver.as_str()) {
+            if manual { notify(format!("dsh 运行时已是最新（v{}）", remote_ver)); }
+            return;
+        }
+
+        // 2) 下载运行时包
+        let Some(url) = remote.get("url").and_then(|v| v.as_str()).map(String::from) else {
+            notify("运行时更新失败：清单缺少下载地址".into());
+            return;
+        };
+        let Some(sig_text) = remote.get("signature").and_then(|v| v.as_str()).map(String::from) else {
+            notify("运行时更新失败：清单缺少签名".into());
+            return;
+        };
+        let payload = match ureq::get(&url).timeout(Duration::from_secs(600)).call() {
+            Ok(resp) => {
+                let mut reader = resp.into_reader();
+                let mut buf: Vec<u8> = Vec::new();
+                use std::io::Read;
+                if reader.read_to_end(&mut buf).is_err() {
+                    notify("运行时更新失败：下载中断".into());
+                    return;
+                }
+                buf
+            }
+            Err(_) => {
+                notify("运行时更新失败：无法下载".into());
+                return;
+            }
+        };
+
+        // 3) 验签（minisign，与整包更新同一密钥）
+        let verify_ok = (|| -> Result<(), String> {
+            let pk = minisign::PublicKey::from_base64(RUNTIME_PUBKEY)
+                .map_err(|e| format!("公钥解析失败: {}", e))?;
+            let sigbox = minisign::SignatureBox::from_string(&sig_text)
+                .map_err(|e| format!("签名解析失败: {}", e))?;
+            minisign::verify(&pk, &sigbox, std::io::Cursor::new(&payload), false, false, true)
+                .map_err(|e| format!("签名验证失败: {}", e))?;
+            Ok(())
+        })();
+        if let Err(e) = verify_ok {
+            notify(format!("运行时更新已中止：{}", e));
+            return;
+        }
+
+        // 4) 原子安装：解压到 .tmp-<ver> → rename 为 <ver> → 更新 manifest
+        let Some(root) = runtime_root(&handle) else {
+            notify("运行时更新失败：无法定位数据目录".into());
+            return;
+        };
+        let _ = std::fs::create_dir_all(&root);
+        let tmp_dir = root.join(format!(".tmp-{}", remote_ver));
+        let final_dir = root.join(&remote_ver);
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        let _ = std::fs::remove_dir_all(&final_dir);
+        if std::fs::create_dir_all(&tmp_dir).is_err() {
+            notify("运行时更新失败：无法创建临时目录".into());
+            return;
+        }
+        // 写 payload 并解压（tar 顶层为 dsh/）
+        let tar_path = tmp_dir.join("payload.tar.gz");
+        if std::fs::write(&tar_path, &payload).is_err() {
+            notify("运行时更新失败：无法写入临时文件".into());
+            return;
+        }
+        let extract = Command::new("tar")
+            .args(["-xzf", tar_path.to_str().unwrap_or_default(), "-C", tmp_dir.to_str().unwrap_or_default()])
+            .status();
+        let _ = std::fs::remove_file(&tar_path);
+        let installed_dsh = tmp_dir.join("dsh");
+        match extract {
+            Ok(st) if st.success() && installed_dsh.is_dir() => {
+                if std::fs::rename(&tmp_dir, &final_dir).is_err() {
+                    notify("运行时更新失败：切换版本失败".into());
+                    return;
+                }
+                let prev = local.clone();
+                set_runtime_version(&handle, &remote_ver, prev.as_deref());
+                cleanup_runtime_dirs(&handle, &[remote_ver.clone(), prev.unwrap_or_default()]);
+                notify(format!(
+                    "dsh 运行时已更新至 v{}（重启 DSH Desktop 后生效）",
+                    remote_ver
+                ));
+            }
+            _ => {
+                let _ = std::fs::remove_dir_all(&tmp_dir);
+                notify("运行时更新失败：解压失败（包已下载，可重试）".into());
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 入口
 // ---------------------------------------------------------------------------
 
@@ -433,6 +655,8 @@ pub fn run() {
             build_tray(app.handle())?;
             build_menu(app.handle())?;
             start_backend(app.handle());
+            // 启动时静默检查 dsh 运行时更新（不阻塞，不打扰）
+            check_runtime_update(app.handle(), false);
             Ok(())
         })
         .on_window_event(|window, event| {

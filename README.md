@@ -99,15 +99,53 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
 
 ## 发布更新（updater）
 
-1. **更新签名密钥**（已生成于 `~/.tauri/dsh-desktop.key`，密码 `dsh-desktop-update-2026`）：
-   - 私钥用于签名更新包（`scripts/build.sh` 自动读取，可用 `DSH_UPDATE_KEY_PASSWORD` 覆盖）
-   - 公钥已固化在 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`
-   - ⚠️ **私钥和密码务必妥善保存**，丢失后无法再签发更新
-2. **发布**：把 `DSH Desktop.app.tar.gz`、`DSH Desktop.app.tar.gz.sig`、`latest.json` 上传到 GitHub Releases（tag `v<版本>`）或任意静态服务器
-3. **更新源**：`tauri.conf.json` 的 `plugins.updater.endpoints` 指向清单地址（默认 GitHub Releases 模板，替换 `OWNER`）
-4. 用户在托盘菜单点「检查更新…」→ 发现新版本 → 下载安装 → 重启生效
+### 双通道更新架构
 
-> 修改 `latest.json` 中 `url` 时，`signature` 必须与对应 `.tar.gz.sig` 一致（每次构建签名都不同）。
+| 通道 | 更新对象 | 触发方式 | 频率 |
+| --- | --- | --- | --- |
+| **整包更新**（tauri-plugin-updater） | 客户端壳（窗口/托盘/UI） | 托盘「检查更新…」 | 低频 |
+| **运行时更新**（自研） | **dsh 依赖树**（`@deepseek-ai/dsh` + node_modules） | 启动静默检查 + 托盘「检查 dsh 运行时更新…」 | 高频（dsh 迭代快） |
+
+运行时独立更新的设计：dsh 依赖树从 App 内置改为**优先从用户数据目录加载**，更新无需升级客户端版本。
+
+```
+~/Library/Application Support/com.dsh.desktop/runtime/   ← 可更新区（用户数据目录）
+├── manifest.json            # { "current": "0.1.0-rc.6", "previous": … }
+└── 0.1.0-rc.6/
+    └── dsh/…                # 新版本目录（原子切换，保留上一版回滚）
+```
+
+加载策略：node 始终用 App 内置（稳定）；dsh 优先数据目录 current 版本，缺失/损坏时**回退内置**。
+
+### 更新签名密钥（已生成）
+
+- 私钥：`~/.tauri/dsh-desktop.key`（密码 `dsh-desktop-update-2026`，可用 `DSH_UPDATE_KEY_PASSWORD` 覆盖）
+- 公钥：固化在 `tauri.conf.json`（整包）与 `src-tauri/src/lib.rs` 的 `RUNTIME_PUBKEY`（运行时）
+- ⚠️ **私钥与密码务必妥善保存**，丢失后无法签发任何更新
+
+### 发布运行时（dsh 更新）
+
+```bash
+node scripts/publish-runtime.mjs              # 打包 dsh + 签名 + 生成 runtime-manifest.json
+node scripts/publish-runtime.mjs --upload     # 额外上传到 GitHub Releases（tag: runtime-v<版本>）
+```
+
+产物（`bundle/runtime/`）：`runtime-dsh-<平台>-<版本>.tar.gz` + `.sig` + `runtime-manifest.json`。用户端启动时静默检查 `runtime-manifest.json` → 下载 → 验签 → 原子替换 → 重启生效。
+
+### 发布整包（客户端升级）
+
+```bash
+./scripts/build.sh                                    # 构建 + 签名（自动读取私钥）
+GH_OWNER=VictoriaGitHub node scripts/make-latest-json.mjs   # 生成 latest.json
+# 上传 .app.tar.gz / .sig / latest.json / dmg 到 GitHub Releases
+```
+
+> GitHub 会把资产名中的空格规范化为点（如 `DSH Desktop` → `DSH.Desktop`），`make-latest-json.mjs` 已自动处理。
+
+### 更新源
+
+- 整包：`tauri.conf.json` → `plugins.updater.endpoints`
+- 运行时：`src-tauri/src/lib.rs` → `RUNTIME_MANIFEST_URL`
 
 ## 配置
 
