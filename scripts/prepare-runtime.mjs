@@ -18,6 +18,7 @@ import { execSync } from 'node:child_process'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'src-tauri', 'runtime')
 const NODE_VERSION = process.env.RUNTIME_NODE_VERSION || 'v23.11.0'
+const IS_WIN = process.platform === 'win32'
 
 // ---------- 平台映射 ----------
 const NODE_PLATFORM = {
@@ -33,7 +34,7 @@ console.log(`[runtime] 目标平台: ${TRIPLE}，Node ${NODE_VERSION}`)
 
 // ---------- 1. Node 官方二进制 ----------
 const NODE_DIR = join(ROOT, 'src-tauri', '.runtime-cache', `node-${NODE_VERSION}-${TRIPLE}`)
-const NODE_BIN = join(OUT, 'bin', 'node')
+const NODE_BIN = join(OUT, 'bin', IS_WIN ? 'node.exe' : 'node')
 
 function ensureNode() {
   if (existsSync(NODE_BIN) && !process.argv.includes('--force')) {
@@ -51,10 +52,10 @@ function ensureNode() {
   mkdirSync(NODE_DIR, { recursive: true })
   console.log('[runtime] 解压 Node…')
   execSync(`tar -xzf "${tarball}" -C "${NODE_DIR}" --strip-components=1`, { stdio: 'inherit' })
-  const src = join(NODE_DIR, 'bin', 'node')
+  const src = join(NODE_DIR, 'bin', IS_WIN ? 'node.exe' : 'node')
   mkdirSync(dirname(NODE_BIN), { recursive: true })
   cpSync(src, NODE_BIN)
-  execSync(`chmod +x "${NODE_BIN}"`)
+  if (!IS_WIN) execSync(`chmod +x "${NODE_BIN}"`)
   console.log(`[runtime] Node -> ${NODE_BIN}`)
 }
 
@@ -235,5 +236,15 @@ mkdirSync(OUT, { recursive: true })
 ensureNode()
 ensureDsh()
 shrink()
-const size = execSync(`du -sh "${OUT}"`).toString().trim()
-console.log(`\n[runtime] 完成: ${OUT} (${size})`)
+// 目录大小（跨平台，避免依赖 du）
+function dirSizeOf(dir) {
+  let total = 0
+  try {
+    for (const e of readdirSync(dir)) {
+      const p = join(dir, e)
+      total += statSync(p).isDirectory() ? dirSizeOf(p) : statSync(p).size
+    }
+  } catch { /* ignore */ }
+  return total
+}
+console.log(`\n[runtime] 完成: ${OUT} (${(dirSizeOf(OUT) / 1048576).toFixed(0)}MB)`)
