@@ -41,9 +41,17 @@ function ensureNode() {
     console.log('[runtime] Node 已就绪，跳过下载')
     return
   }
-  // Windows 官方包是 .zip；macOS/Linux 是 .tar.gz
+  // Windows 官方包是 .zip，且 nodejs.org 的 Windows 目录名是 win-x64（非 npm 平台名 win32-x64）
   const ext = IS_WIN ? 'zip' : 'tar.gz'
-  const url = `https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-${TRIPLE}.${ext}`
+  const NODE_DIST = {
+    'darwin-arm64': 'darwin-arm64',
+    'darwin-x64': 'darwin-x64',
+    'win32-x64': 'win-x64',
+    'win32-arm64': 'win-arm64',
+    'linux-x64': 'linux-x64',
+    'linux-arm64': 'linux-arm64',
+  }[TRIPLE]
+  const url = `https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-${NODE_DIST}.${ext}`
   const tarball = join(ROOT, 'src-tauri', '.runtime-cache', `node-${NODE_VERSION}-${TRIPLE}.${ext}`)
   mkdirSync(dirname(tarball), { recursive: true })
   if (!existsSync(tarball)) {
