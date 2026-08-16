@@ -41,8 +41,10 @@ function ensureNode() {
     console.log('[runtime] Node 已就绪，跳过下载')
     return
   }
-  const url = `https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-${TRIPLE}.tar.gz`
-  const tarball = join(ROOT, 'src-tauri', '.runtime-cache', `node-${NODE_VERSION}-${TRIPLE}.tar.gz`)
+  // Windows 官方包是 .zip；macOS/Linux 是 .tar.gz
+  const ext = IS_WIN ? 'zip' : 'tar.gz'
+  const url = `https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-${TRIPLE}.${ext}`
+  const tarball = join(ROOT, 'src-tauri', '.runtime-cache', `node-${NODE_VERSION}-${TRIPLE}.${ext}`)
   mkdirSync(dirname(tarball), { recursive: true })
   if (!existsSync(tarball)) {
     console.log(`[runtime] 下载 Node: ${url}`)
@@ -51,7 +53,10 @@ function ensureNode() {
   rmSync(NODE_DIR, { recursive: true, force: true })
   mkdirSync(NODE_DIR, { recursive: true })
   console.log('[runtime] 解压 Node…')
-  execSync(`tar -xzf "${tarball}" -C "${NODE_DIR}" --strip-components=1`, { stdio: 'inherit' })
+  // Windows 10+ 自带 bsdtar，可直接解 zip（支持 --strip-components）
+  execSync(IS_WIN
+    ? `tar -xf "${tarball}" -C "${NODE_DIR}" --strip-components=1`
+    : `tar -xzf "${tarball}" -C "${NODE_DIR}" --strip-components=1`, { stdio: 'inherit' })
   const src = join(NODE_DIR, 'bin', IS_WIN ? 'node.exe' : 'node')
   mkdirSync(dirname(NODE_BIN), { recursive: true })
   cpSync(src, NODE_BIN)
