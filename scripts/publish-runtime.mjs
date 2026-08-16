@@ -86,7 +86,7 @@ if (process.argv.includes('--upload')) {
   const tag = `runtime-v${version}`
   console.log(`[publish-runtime] 创建 Release ${tag}…`)
   const create = execSync(
-    `curl -s -X POST https://api.github.com/repos/${owner}/${repo}/releases -H "Authorization: token ${token}" -H "Content-Type: application/json" -d '{"tag_name":"${tag}","name":"${tag}","body":"DSH 运行时 v${version}（dsh 依赖树独立更新）","draft":false,"prerelease":false}'`,
+    `curl -s -X POST https://api.github.com/repos/${owner}/${repo}/releases -H "Authorization: token ${token}" -H "Content-Type: application/json" -d '{"tag_name":"${tag}","name":"${tag}","body":"DSH 运行时 v${version}（dsh 依赖树独立更新）","draft":false,"prerelease":true}'`,
     { encoding: 'utf-8' },
   )
   const releaseId = JSON.parse(create).id
