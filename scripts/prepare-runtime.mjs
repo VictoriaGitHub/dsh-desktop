@@ -65,7 +65,8 @@ function ensureNode() {
   execSync(IS_WIN
     ? `tar -xf "${tarball}" -C "${NODE_DIR}" --strip-components=1`
     : `tar -xzf "${tarball}" -C "${NODE_DIR}" --strip-components=1`, { stdio: 'inherit' })
-  const src = join(NODE_DIR, 'bin', IS_WIN ? 'node.exe' : 'node')
+  // Windows zip 解压后 node.exe 在根目录；macOS/Linux tar.gz 在 bin/ 下
+  const src = IS_WIN ? join(NODE_DIR, 'node.exe') : join(NODE_DIR, 'bin', 'node')
   mkdirSync(dirname(NODE_BIN), { recursive: true })
   cpSync(src, NODE_BIN)
   if (!IS_WIN) execSync(`chmod +x "${NODE_BIN}"`)
