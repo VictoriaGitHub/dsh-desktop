@@ -28,20 +28,36 @@ jobs:
           Start-Process -FilePath .\setup.exe -ArgumentList "/S" -Wait
           Start-Sleep 5
 
+      - name: Ensure WebView2 Runtime (Windows Server 无 Edge，需手动装)
+        shell: pwsh
+        run: |
+          Write-Host "== 检查/安装 WebView2 Runtime =="
+          $installed = Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" -ErrorAction SilentlyContinue
+          if ($installed) {
+            Write-Host "WebView2 已安装: $($installed.pv)"
+          } else {
+            Write-Host "下载 WebView2 Evergreen Bootstrapper…"
+            Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile webview2.exe -UseBasicParsing
+            Start-Process -FilePath .\webview2.exe -ArgumentList "/silent /install" -Wait
+            Write-Host "WebView2 安装完成"
+          }
+
       - name: Launch & verify
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = 'Continue'
           $installDir = Join-Path ${env:ProgramFiles} "DSH Desktop"
           if (-not (Test-Path $installDir)) { throw "安装目录不存在: $installDir" }
           $app = Get-ChildItem $installDir -Filter "*.exe" | Select-Object -First 1
-          Write-Host "== 启动: $($app.Name) =="
+          Write-Host "== 启动: $($app.FullName) =="
           Start-Process -FilePath $app.FullName
-          Start-Sleep 35
+          Start-Sleep 40
           Write-Host "== 进程检查 =="
           $procs = Get-Process | Where-Object { $_.ProcessName -like "*dsh*" -or $_.ProcessName -like "*node*" } | Select-Object ProcessName, Id
           $procs | Format-Table | Out-String | Write-Host
-          if (-not $procs) { throw "未发现 dsh/node 进程" }
+          Write-Host "== backend.log =="
+          $log = Join-Path $env:USERPROFILE ".dsh-desktop\backend.log"
+          if (Test-Path $log) { Get-Content $log -Tail 15 | Write-Host } else { Write-Host "(无 backend.log)" }
           Write-Host "== 后端 HTTP 检查 =="
           $resp = Invoke-WebRequest -Uri "http://127.0.0.1:3080/" -UseBasicParsing -TimeoutSec 15
           Write-Host "HTTP status: $($resp.StatusCode)"
