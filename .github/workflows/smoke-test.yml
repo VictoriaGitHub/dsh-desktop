@@ -1,0 +1,49 @@
+name: Smoke Test (released build)
+
+# 只测试已发布的安装包，不编译：下载 v0.1.1 的 Windows setup.exe → 静默安装 → 启动 → 验证
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Build Windows"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  smoke-test:
+    runs-on: windows-latest
+    steps:
+      - name: Download released setup.exe
+        shell: pwsh
+        run: |
+          $url = "https://github.com/VictoriaGitHub/dsh-desktop/releases/download/v0.1.1/DSH.Desktop_0.1.1_x64-setup.exe"
+          Invoke-WebRequest -Uri $url -OutFile setup.exe -UseBasicParsing
+          $len = (Get-Item setup.exe).Length
+          Write-Host "已下载: $([math]::Round($len/1MB,1)) MB"
+          if ($len -lt 10MB) { throw "安装包太小，疑似下载失败" }
+
+      - name: Silent install
+        shell: pwsh
+        run: |
+          Write-Host "== 静默安装 =="
+          Start-Process -FilePath .\setup.exe -ArgumentList "/S" -Wait
+          Start-Sleep 5
+
+      - name: Launch & verify
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Join-Path ${env:ProgramFiles} "DSH Desktop"
+          if (-not (Test-Path $installDir)) { throw "安装目录不存在: $installDir" }
+          $app = Get-ChildItem $installDir -Filter "*.exe" | Select-Object -First 1
+          Write-Host "== 启动: $($app.Name) =="
+          Start-Process -FilePath $app.FullName
+          Start-Sleep 35
+          Write-Host "== 进程检查 =="
+          $procs = Get-Process | Where-Object { $_.ProcessName -like "*dsh*" -or $_.ProcessName -like "*node*" } | Select-Object ProcessName, Id
+          $procs | Format-Table | Out-String | Write-Host
+          if (-not $procs) { throw "未发现 dsh/node 进程" }
+          Write-Host "== 后端 HTTP 检查 =="
+          $resp = Invoke-WebRequest -Uri "http://127.0.0.1:3080/" -UseBasicParsing -TimeoutSec 15
+          Write-Host "HTTP status: $($resp.StatusCode)"
+          if ($resp.StatusCode -ne 200) { throw "后端未响应" }
+          Write-Host "== ✅ Smoke test 通过：Windows 版可安装、可启动、后端正常 =="
