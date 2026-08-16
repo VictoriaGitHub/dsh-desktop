@@ -48,7 +48,12 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $installDir = Join-Path ${env:ProgramFiles} "DSH Desktop"
           if (-not (Test-Path $installDir)) { throw "安装目录不存在: $installDir" }
-          $app = Get-ChildItem $installDir -Filter "*.exe" | Select-Object -First 1
+          Write-Host "== 安装目录内容（前 2 层）=="
+          Get-ChildItem $installDir -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+          Write-Host "== node.exe 是否存在 =="
+          $node = Join-Path $installDir "runtime\bin\node.exe"
+          Write-Host "node.exe: $(Test-Path $node) at $node"
+          $app = Get-ChildItem $installDir -Filter "*.exe" | Where-Object { $_.Name -ne "uninstall.exe" } | Select-Object -First 1
           Write-Host "== 启动: $($app.FullName) =="
           Start-Process -FilePath $app.FullName
           Start-Sleep 40
@@ -57,7 +62,7 @@ jobs:
           $procs | Format-Table | Out-String | Write-Host
           Write-Host "== backend.log =="
           $log = Join-Path $env:USERPROFILE ".dsh-desktop\backend.log"
-          if (Test-Path $log) { Get-Content $log -Tail 15 | Write-Host } else { Write-Host "(无 backend.log)" }
+          if (Test-Path $log) { Get-Content $log -Tail 20 | Write-Host } else { Write-Host "(无 backend.log)" }
           Write-Host "== 后端 HTTP 检查 =="
           $resp = Invoke-WebRequest -Uri "http://127.0.0.1:3080/" -UseBasicParsing -TimeoutSec 15
           Write-Host "HTTP status: $($resp.StatusCode)"
