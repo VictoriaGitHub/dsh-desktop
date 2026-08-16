@@ -26,6 +26,8 @@ const platformKey = `${os}-${arch}`
 
 const sigPath = join(BUNDLE, `${product}.app.tar.gz.sig`)
 const tarball = `${product}.app.tar.gz`
+// GitHub 会把资产名中的空格规范化为点，下载 URL 必须用规范化后的名字
+const tarballGhName = tarball.replace(/ /g, '.')
 if (!existsSync(sigPath)) {
   console.error(`未找到签名文件: ${sigPath}\n请先运行 ./scripts/build.sh 构建。`)
   process.exit(1)
@@ -39,7 +41,7 @@ const latest = {
   platforms: {
     [platformKey]: {
       signature,
-      url: `https://github.com/${owner}/${repo}/releases/download/v${version}/${tarball}`,
+      url: `https://github.com/${owner}/${repo}/releases/download/v${version}/${tarballGhName}`,
     },
   },
 }
