@@ -70,6 +70,30 @@ jobs:
             src-tauri/target/release/bundle/nsis/latest.json
           if-no-files-found: error
 
+      - name: Smoke test (install & launch on real Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1
+          Write-Host "== 1) 静默安装: $($exe.Name)"
+          Start-Process -FilePath $exe.FullName -ArgumentList "/S" -Wait
+          Start-Sleep 5
+          $installDir = Join-Path ${env:ProgramFiles} "DSH Desktop"
+          if (-not (Test-Path $installDir)) { throw "安装目录不存在: $installDir" }
+          $app = Get-ChildItem $installDir -Filter "*.exe" | Select-Object -First 1
+          Write-Host "== 2) 启动: $($app.Name)"
+          Start-Process -FilePath $app.FullName
+          Start-Sleep 30
+          Write-Host "== 3) 进程检查:"
+          $procs = Get-Process | Where-Object { $_.ProcessName -like "*dsh*" -or $_.ProcessName -like "*node*" } | Select-Object ProcessName, Id
+          $procs | Format-Table | Out-String | Write-Host
+          if (-not $procs) { throw "未发现 dsh/node 进程" }
+          Write-Host "== 4) 后端 HTTP 检查:"
+          $resp = Invoke-WebRequest -Uri "http://127.0.0.1:3080/" -UseBasicParsing -TimeoutSec 15
+          Write-Host "HTTP status: $($resp.StatusCode)"
+          if ($resp.StatusCode -ne 200) { throw "后端未响应" }
+          Write-Host "== ✅ Smoke test 通过 =="
+
       - name: Publish to Release (workflow_dispatch 或 tag 推送)
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
