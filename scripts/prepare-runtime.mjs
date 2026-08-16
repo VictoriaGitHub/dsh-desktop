@@ -151,8 +151,12 @@ function ensureDsh() {
       }
     }
   } else {
-    console.log('[runtime] npx 缓存未找到 dsh，改用 npm install（需网络）')
-    execSync(`npm install --omit=dev --prefix "${DSH_DIR}" "${DSH_PKG}"`, { stdio: 'inherit' })
+    console.log('[runtime] 未找到 npx 缓存，改用 npm install（需网络，可能较慢）')
+    // --loglevel=info 让 CI 可见进度；--no-audit/--no-fund 加速；15 分钟超时防止静默卡死
+    execSync(
+      `npm install --omit=dev --no-audit --no-fund --loglevel=info --prefix "${DSH_DIR}" "${DSH_PKG}"`,
+      { stdio: 'inherit', timeout: 15 * 60 * 1000 },
+    )
   }
   prunePlatform(join(DSH_DIR, 'node_modules'))
   console.log('[runtime] dsh 就绪')

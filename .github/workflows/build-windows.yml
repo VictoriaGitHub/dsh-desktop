@@ -31,6 +31,7 @@ jobs:
         run: pnpm install
 
       - name: Prepare runtime (Windows x64)
+        timeout-minutes: 20
         run: node scripts/prepare-runtime.mjs
 
       - name: Build & sign
