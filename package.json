@@ -1,0 +1,20 @@
+{
+  "name": "dsh-desktop",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 桌面客户端（Tauri 封装）",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "icon": "node scripts/make-icon.mjs",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:mac": "tauri build --target aarch64-apple-darwin",
+    "build:win": "tauri build --target x86_64-pc-windows-msvc",
+    "build:linux": "tauri build --target x86_64-unknown-linux-gnu"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  },
+  "packageManager": "pnpm@9.15.5+sha512.845196026aab1cc3f098a0474b64dfbab2afe7a1b4e91dd86895d8e4aa32a7a6d03049e2d0ad770bbe4de023a7122fb68c1a1d6e0d033c7076085f9d5d4800d4"
+}

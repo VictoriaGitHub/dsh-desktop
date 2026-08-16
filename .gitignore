@@ -1,0 +1,7 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/runtime/
+src-tauri/.runtime-cache/
+*.log
+.DS_Store
